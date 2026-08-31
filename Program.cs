@@ -37,6 +37,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly MsrdcWindowController _windowController;
     private readonly InputHookService _inputHooks;
     private readonly WindowsAppKeyboardPolicyService _keyboardPolicy;
+    private readonly Icon? _applicationIcon;
     private readonly NotifyIcon _notifyIcon;
     private bool _disposed;
 
@@ -45,6 +46,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _windowController = new MsrdcWindowController();
         _inputHooks = new InputHookService(_windowController);
         _keyboardPolicy = new WindowsAppKeyboardPolicyService();
+        _applicationIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
 
         var menu = new ContextMenuStrip();
         var enabledItem = new ToolStripMenuItem("Enabled")
@@ -69,7 +71,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _notifyIcon = new NotifyIcon
         {
             ContextMenuStrip = menu,
-            Icon = SystemIcons.Application,
+            Icon = _applicationIcon ?? SystemIcons.Application,
             Text = "RDP Tools",
             Visible = true,
         };
@@ -110,5 +112,6 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _windowController.Dispose();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();
+        _applicationIcon?.Dispose();
     }
 }

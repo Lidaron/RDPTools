@@ -1,5 +1,9 @@
 # RDP Tools
 
+<p align="center">
+	<img src="assets/favicon.png" width="128" height="128" alt="RDP Tools icon: connected local and remote windows">
+</p>
+
 ## Project overview
 
 RDP Tools is a small Windows tray utility that makes windowed Windows App remote sessions behave more predictably. It targets sessions hosted by `msrdc.exe` or `Windows365.exe` and removes a few points of friction between local window management and remote keyboard input.

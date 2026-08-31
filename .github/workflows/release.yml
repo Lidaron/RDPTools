@@ -1,0 +1,113 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "true"
+
+jobs:
+  build:
+    name: Build ${{ matrix.runtime }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        runtime:
+          - win-arm64
+          - win-x64
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Validate release tag
+        id: version
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          if ($tag -notmatch '^v(?<version>\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$') {
+            throw "Release tags must use semantic versioning, for example v1.0.0."
+          }
+
+          "version=$($Matches.version)" >> $env:GITHUB_OUTPUT
+
+      - name: Restore
+        run: dotnet restore RDPTools.csproj --runtime ${{ matrix.runtime }}
+
+      - name: Publish
+        run: >-
+          dotnet publish RDPTools.csproj
+          --configuration Release
+          --runtime ${{ matrix.runtime }}
+          --self-contained true
+          --no-restore
+          -p:Version=${{ steps.version.outputs.version }}
+          -p:PublishSingleFile=true
+          -p:EnableCompressionInSingleFile=true
+          --output publish/${{ matrix.runtime }}
+
+      - name: Create release archive
+        shell: pwsh
+        env:
+          RUNTIME: ${{ matrix.runtime }}
+        run: |
+          $archiveDirectory = Join-Path $env:RUNNER_TEMP "RDPTools-$env:RUNTIME"
+          New-Item -ItemType Directory -Path $archiveDirectory
+          Copy-Item "publish/$env:RUNTIME/RDPTools.exe" $archiveDirectory
+          Copy-Item README.md, LICENSE $archiveDirectory
+          Compress-Archive -Path "$archiveDirectory/*" -DestinationPath "RDPTools-$env:RUNTIME.zip"
+
+      - name: Upload release archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: RDPTools-${{ matrix.runtime }}
+          path: RDPTools-${{ matrix.runtime }}.zip
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Create GitHub release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: RDPTools-*
+          path: artifacts
+          merge-multiple: true
+
+      - name: Generate checksums
+        working-directory: artifacts
+        run: sha256sum RDPTools-*.zip > SHA256SUMS.txt
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >-
+          gh release create "${{ github.ref_name }}"
+          artifacts/RDPTools-*.zip
+          artifacts/SHA256SUMS.txt
+          --repo "${{ github.repository }}"
+          --title "RDP Tools ${{ github.ref_name }}"
+          --generate-notes
+          --verify-tag

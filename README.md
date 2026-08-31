@@ -104,6 +104,17 @@ dotnet publish RDPTools.csproj -c Release -r win-x64 --self-contained true -p:Pu
 
 The published executable does not require a separately installed .NET runtime.
 
+## Create a release
+
+Push a semantic-version tag to run the GitHub release workflow:
+
+```powershell
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+The workflow builds self-contained ARM64 and x64 archives, includes this README and the license, generates SHA-256 checksums, and creates a GitHub release with automatically generated notes.
+
 ## Limitations
 
 - The remote keyboard policy takes effect only when a new RDP connection starts.

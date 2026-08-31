@@ -19,20 +19,11 @@ internal static class NativeMethods
 
     internal const int HtCaption = 2;
 
-    internal const uint VkTab = 0x09;
-    internal const uint VkEscape = 0x1B;
-    internal const uint VkSpace = 0x20;
     internal const uint VkUp = 0x26;
-    internal const uint VkF4 = 0x73;
     internal const uint VkLWin = 0x5B;
     internal const uint VkRWin = 0x5C;
-    internal const uint VkLControl = 0xA2;
-    internal const uint VkRControl = 0xA3;
-    internal const uint VkLMenu = 0xA4;
-    internal const uint VkRMenu = 0xA5;
 
     internal const uint LlkhfExtended = 0x01;
-    internal const uint LlkhfAltDown = 0x20;
 
     internal const uint GaRoot = 2;
     internal const uint MonitorDefaultToNearest = 2;
@@ -59,7 +50,6 @@ internal static class NativeMethods
     internal const uint GuiInMoveSize = 0x0002;
 
     internal delegate nint HookProc(int code, nuint wParam, nint lParam);
-
     [DllImport("user32.dll", SetLastError = true)]
     internal static extern nint SetWindowsHookExW(int hookId, HookProc callback, nint module, uint threadId);
 
@@ -90,11 +80,10 @@ internal static class NativeMethods
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool IsChild(nint parent, nint window);
+    internal static extern bool IsWindow(nint window);
 
     [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool IsWindow(nint window);
+    internal static extern short GetAsyncKeyState(int virtualKey);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -159,10 +148,6 @@ internal static class NativeMethods
         uint flags,
         uint timeout,
         out nuint result);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    internal static extern bool PostMessageW(nint window, uint message, nuint wParam, nint lParam);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

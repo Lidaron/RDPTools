@@ -223,50 +223,6 @@ internal sealed class MsrdcWindowController : IDisposable
         }
     }
 
-    internal bool TryGetKeyboardTarget(nint rootWindow, out KeyboardTarget keyboardTarget)
-    {
-        rootWindow = GetRootWindow(rootWindow);
-        if (!IsSupportedRdpWindow(rootWindow))
-        {
-            keyboardTarget = default;
-            return false;
-        }
-
-        keyboardTarget = new KeyboardTarget(rootWindow, GetFocusedChild(rootWindow));
-        return true;
-    }
-
-    internal bool TryPostKey(KeyboardTarget keyboardTarget, uint message, in NativeMethods.KeyboardLowLevelHookData key)
-    {
-        if (!IsSupportedRdpWindow(keyboardTarget.RootWindow) ||
-            !NativeMethods.IsWindow(keyboardTarget.TargetWindow) ||
-            keyboardTarget.TargetWindow != keyboardTarget.RootWindow &&
-            !NativeMethods.IsChild(keyboardTarget.RootWindow, keyboardTarget.TargetWindow))
-        {
-            return false;
-        }
-
-        var keyUp = message is NativeMethods.WmKeyUp or NativeMethods.WmSysKeyUp;
-        var lParam = 1u | ((key.ScanCode & 0xFFu) << 16);
-        if ((key.Flags & NativeMethods.LlkhfExtended) != 0)
-        {
-            lParam |= 1u << 24;
-        }
-
-        if ((key.Flags & NativeMethods.LlkhfAltDown) != 0 || message is NativeMethods.WmSysKeyDown or NativeMethods.WmSysKeyUp)
-        {
-            lParam |= 1u << 29;
-        }
-
-        if (keyUp)
-        {
-            lParam |= 3u << 30;
-        }
-
-        return NativeMethods.PostMessageW(keyboardTarget.TargetWindow, message, key.VirtualKey, unchecked((nint)(int)lParam));
-    }
-
-    internal readonly record struct KeyboardTarget(nint RootWindow, nint TargetWindow);
     internal readonly record struct AeroSnapCandidate(
         nint Window,
         uint ProcessId,
@@ -323,25 +279,6 @@ internal sealed class MsrdcWindowController : IDisposable
         var className = new StringBuilder(256);
         return NativeMethods.GetClassNameW(window, className, className.Capacity) > 0 &&
             string.Equals(className.ToString(), expectedClassName, StringComparison.Ordinal);
-    }
-
-    private static nint GetFocusedChild(nint rootWindow)
-    {
-        var threadId = NativeMethods.GetWindowThreadProcessId(rootWindow, out _);
-        var threadInfo = new NativeMethods.GuiThreadInfo
-        {
-            Size = (uint)Marshal.SizeOf<NativeMethods.GuiThreadInfo>(),
-        };
-
-        if (threadId != 0 &&
-            NativeMethods.GetGUIThreadInfo(threadId, ref threadInfo) &&
-            threadInfo.FocusedWindow != 0 &&
-            (threadInfo.FocusedWindow == rootWindow || NativeMethods.IsChild(rootWindow, threadInfo.FocusedWindow)))
-        {
-            return threadInfo.FocusedWindow;
-        }
-
-        return rootWindow;
     }
 
     private void Restore(nint window)

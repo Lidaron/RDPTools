@@ -5,9 +5,10 @@ RDP Tools is a Windows tray utility for Windows App remote sessions hosted by `m
 - Pressing `Win+Up` fills the current monitor's work area without entering full screen.
 - Dragging the session window to the top edge for Aero Snap fills the work area without entering full screen.
 - Double-clicking the title bar is passed through unchanged, so MSRDC can enter or leave its native full-screen mode.
-- While a managed window fills the work area, shell-reserved keyboard chords are redirected to MSRDC, including Windows-key shortcuts, `Alt+Tab`, `Alt+Esc`, `Alt+F4`, and `Ctrl+Esc`.
+- Windows App connections are configured with `keyboardhook:i:1`, the RDP setting equivalent to MSTSC's **Apply Windows key combinations: On the remote computer**.
+- While the remote session has focus, physical OS shortcuts such as `Alt+Tab`, `Win`, `Win+R`, `Ctrl+Esc`, and `Alt+F4` are handled by the remote session itself.
 
-The utility uses Windows low-level mouse and keyboard hooks in its own process. It does not inject a DLL into MSRDC or modify the client installation.
+The utility uses Windows low-level mouse and keyboard hooks in its own process. It does not inject a DLL into MSRDC or modify the installed application binaries.
 
 ## Requirements
 
@@ -15,7 +16,7 @@ The utility uses Windows low-level mouse and keyboard hooks in its own process. 
 - Windows App or the Microsoft Remote Desktop client
 - .NET 10 SDK to build from source
 
-Run RDP Tools at the same integrity level as MSRDC. If MSRDC is elevated, RDP Tools must also be elevated or Windows UIPI can block forwarded keyboard messages.
+Run RDP Tools at the same integrity level as MSRDC so the hooks observe the same desktop input stream.
 
 ## Build and run
 
@@ -37,6 +38,14 @@ Use the executable under `publish\win-arm64` on ARM64 Windows or `publish\win-x6
 
 ## Keyboard limitations
 
-Forwarded shortcuts are posted to MSRDC's focused window because Windows normally reserves them for the local shell. Whether a particular chord reaches the remote session still depends on the installed MSRDC version and its input handling.
+RDP Tools updates Windows App's cached RDP resource and launch payloads under its per-user package data. It adds this standard RDP property:
 
-Windows does not allow a normal desktop process to synthesize secure-attention sequences. Use MSRDC's supported `Ctrl+Alt+End` sequence when the remote session needs `Ctrl+Alt+Delete`. OS-secured shortcuts such as `Win+L` can also remain local on some Windows versions.
+```text
+keyboardhook:i:1
+```
+
+Cached payloads can be signed. RDP Tools changes the keyboard policy only when the payload's `signscope` does not include `keyboardhook`; it never changes signed connection, authentication, or gateway fields.
+
+The setting is read when an RDP connection starts. After RDP Tools is installed or updated, disconnect the existing remote session and reconnect it before testing keyboard shortcuts. Merely closing or restoring the session window is not sufficient.
+
+Windows does not allow a normal desktop process to synthesize secure-attention sequences. Use Windows App's supported `Ctrl+Alt+End` sequence when the remote session needs `Ctrl+Alt+Delete`.

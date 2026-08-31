@@ -36,6 +36,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 {
     private readonly MsrdcWindowController _windowController;
     private readonly InputHookService _inputHooks;
+    private readonly WindowsAppKeyboardPolicyService _keyboardPolicy;
     private readonly NotifyIcon _notifyIcon;
     private bool _disposed;
 
@@ -43,6 +44,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         _windowController = new MsrdcWindowController();
         _inputHooks = new InputHookService(_windowController);
+        _keyboardPolicy = new WindowsAppKeyboardPolicyService();
 
         var menu = new ContextMenuStrip();
         var enabledItem = new ToolStripMenuItem("Enabled")
@@ -73,7 +75,11 @@ internal sealed class TrayApplicationContext : ApplicationContext
         };
     }
 
-    internal void Start() => _inputHooks.Start();
+    internal void Start()
+    {
+        _keyboardPolicy.Start();
+        _inputHooks.Start();
+    }
 
     protected override void ExitThreadCore()
     {
@@ -100,6 +106,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _disposed = true;
         _inputHooks.Dispose();
+        _keyboardPolicy.Dispose();
         _windowController.Dispose();
         _notifyIcon.Visible = false;
         _notifyIcon.Dispose();

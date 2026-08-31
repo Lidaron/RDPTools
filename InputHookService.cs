@@ -11,24 +11,16 @@ internal sealed class InputHookService : IDisposable
     private readonly Control _dispatcher;
     private readonly NativeMethods.HookProc _mouseCallback;
     private readonly NativeMethods.HookProc _keyboardCallback;
-    private readonly Dictionary<uint, MsrdcWindowController.KeyboardTarget> _capturedSystemKeys = [];
+    private readonly HashSet<uint> _physicalKeysDown = [];
+    private readonly HashSet<uint> _suppressedPhysicalKeys = [];
 
     private nint _mouseHook;
     private nint _keyboardHook;
     private nint _lastCaptionWindow;
-    private MsrdcWindowController.KeyboardTarget _windowsChordTarget;
     private MsrdcWindowController.AeroSnapCandidate _aeroSnapCandidate;
     private NativeMethods.Point _lastCaptionPosition;
     private NativeMethods.Point _aeroSnapStartPosition;
     private uint _lastCaptionClickTime;
-    private bool _leftWindowsDown;
-    private bool _rightWindowsDown;
-    private bool _leftAltDown;
-    private bool _rightAltDown;
-    private bool _leftControlDown;
-    private bool _rightControlDown;
-    private bool _consumeNormalWindowWinUp;
-    private bool _consumeNormalWindowWindowsRelease;
     private uint _pendingNormalWindowsKey;
     private uint _pendingNormalWindowsScanCode;
     private uint _pendingNormalWindowsFlags;
@@ -82,10 +74,19 @@ internal sealed class InputHookService : IDisposable
             throw new Win32Exception(error, "The keyboard hook could not be installed.");
         }
 
+        for (var virtualKey = 1; virtualKey < 256; virtualKey++)
+        {
+            if ((NativeMethods.GetAsyncKeyState(virtualKey) & 0x8000) != 0)
+            {
+                _physicalKeysDown.Add((uint)virtualKey);
+            }
+        }
     }
 
     public void Dispose()
     {
+        ResetKeyboardCapture();
+
         if (_keyboardHook != 0)
         {
             NativeMethods.UnhookWindowsHookEx(_keyboardHook);
@@ -180,6 +181,7 @@ internal sealed class InputHookService : IDisposable
             return NativeMethods.CallNextHookEx(_keyboardHook, code, wParam, lParam);
         }
 
+        uint currentVirtualKey = 0;
         try
         {
             var message = (uint)wParam;
@@ -189,13 +191,32 @@ internal sealed class InputHookService : IDisposable
             }
 
             var key = Marshal.PtrToStructure<NativeMethods.KeyboardLowLevelHookData>(lParam);
+            currentVirtualKey = key.VirtualKey;
             if ((key.Flags & NativeMethods.LlkhfInjected) != 0 && key.ExtraInfo == ReplayInputMarker)
             {
                 return NativeMethods.CallNextHookEx(_keyboardHook, code, wParam, lParam);
             }
 
             var keyDown = message is NativeMethods.WmKeyDown or NativeMethods.WmSysKeyDown;
-            UpdateModifierState(key.VirtualKey, keyDown);
+            var previouslyPhysicallyDown = _physicalKeysDown.Contains(key.VirtualKey);
+            if (keyDown)
+            {
+                _physicalKeysDown.Add(key.VirtualKey);
+            }
+            else
+            {
+                _physicalKeysDown.Remove(key.VirtualKey);
+            }
+
+            if (_suppressedPhysicalKeys.Contains(key.VirtualKey))
+            {
+                if (!keyDown)
+                {
+                    _suppressedPhysicalKeys.Remove(key.VirtualKey);
+                }
+
+                return 1;
+            }
 
             if (!Enabled)
             {
@@ -203,65 +224,45 @@ internal sealed class InputHookService : IDisposable
             }
 
             var isWindowsKey = key.VirtualKey is NativeMethods.VkLWin or NativeMethods.VkRWin;
-            nint pseudoWindow = 0;
-            if (_windowsChordTarget.RootWindow != 0 ||
-                (isWindowsKey && keyDown &&
-                  _windowController.TryGetForegroundMsrdcWindow(out pseudoWindow) &&
-                 _windowController.IsPseudoMaximized(pseudoWindow)))
-            {
-                if (_windowsChordTarget.RootWindow == 0 &&
-                    !_windowController.TryGetKeyboardTarget(pseudoWindow, out _windowsChordTarget))
-                {
-                    return NativeMethods.CallNextHookEx(_keyboardHook, code, wParam, lParam);
-                }
-
-                if (!_windowController.TryPostKey(_windowsChordTarget, message, key))
-                {
-                    ResetKeyboardCapture();
-                    return NativeMethods.CallNextHookEx(_keyboardHook, code, wParam, lParam);
-                }
-
-                if (!keyDown && isWindowsKey && !_leftWindowsDown && !_rightWindowsDown)
-                {
-                    _windowsChordTarget = default;
-                }
-
-                return 1;
-            }
-
             if (_pendingNormalWindowsKey != 0)
             {
                 if (isWindowsKey && key.VirtualKey == _pendingNormalWindowsKey)
                 {
                     if (!keyDown)
                     {
-                        ReplayPendingWindowsKey(includeKeyUp: true);
+                        var pairInserted = ReplayPendingWindowsKey(includeKeyUp: true);
+                        if (pairInserted < 2)
+                        {
+                            return NativeMethods.CallNextHookEx(_keyboardHook, code, wParam, lParam);
+                        }
                     }
 
                     return 1;
                 }
 
                 if (keyDown &&
+                    !previouslyPhysicallyDown &&
                     key.VirtualKey == NativeMethods.VkUp &&
+                    _physicalKeysDown.All(
+                        virtualKey => virtualKey == NativeMethods.VkUp ||
+                            virtualKey == _pendingNormalWindowsKey) &&
                     _windowController.TryGetForegroundMsrdcWindow(out var normalWindow) &&
                     normalWindow == _pendingNormalWindowsWindow &&
                     !_windowController.IsPseudoMaximized(normalWindow) &&
                     !_windowController.IsNativeMaximized(normalWindow))
                 {
+                    _suppressedPhysicalKeys.Add(_pendingNormalWindowsKey);
+                    _suppressedPhysicalKeys.Add(NativeMethods.VkUp);
                     ClearPendingWindowsKey();
-                    _consumeNormalWindowWinUp = true;
-                    _consumeNormalWindowWindowsRelease = true;
                     Dispatch(() => _windowController.PseudoMaximize(normalWindow));
                     return 1;
                 }
 
-                var replayed = ReplayPendingWindowsKeyWithCurrent(key, keyDown);
-                if (replayed)
+                var combinedInserted = ReplayPendingWindowsKeyWithCurrent(key, keyDown);
+                if (combinedInserted == 2)
                 {
                     return 1;
                 }
-
-                _consumeNormalWindowWindowsRelease = true;
             }
 
             if (isWindowsKey &&
@@ -277,95 +278,19 @@ internal sealed class InputHookService : IDisposable
                 return 1;
             }
 
-            if (key.VirtualKey == NativeMethods.VkUp && _consumeNormalWindowWinUp)
-            {
-                if (!keyDown)
-                {
-                    _consumeNormalWindowWinUp = false;
-                }
-
-                return 1;
-            }
-
-            if (isWindowsKey && _consumeNormalWindowWindowsRelease && !keyDown)
-            {
-                if (!_leftWindowsDown && !_rightWindowsDown)
-                {
-                    _consumeNormalWindowWindowsRelease = false;
-                }
-
-                return 1;
-            }
-
-            if (TryGetCapturedSystemChord(key.VirtualKey, keyDown, out var systemChordTarget))
-            {
-                return _windowController.TryPostKey(systemChordTarget, message, key)
-                    ? 1
-                    : NativeMethods.CallNextHookEx(_keyboardHook, code, wParam, lParam);
-            }
         }
         catch
         {
+            var captured = _pendingNormalWindowsKey != 0 ||
+                _suppressedPhysicalKeys.Contains(currentVirtualKey);
             ResetKeyboardCapture();
+            if (captured)
+            {
+                return 1;
+            }
         }
 
         return NativeMethods.CallNextHookEx(_keyboardHook, code, wParam, lParam);
-    }
-
-    private bool TryGetCapturedSystemChord(
-        uint virtualKey,
-        bool keyDown,
-        out MsrdcWindowController.KeyboardTarget keyboardTarget)
-    {
-        if (_capturedSystemKeys.TryGetValue(virtualKey, out keyboardTarget))
-        {
-            if (!keyDown)
-            {
-                _capturedSystemKeys.Remove(virtualKey);
-            }
-
-            return true;
-        }
-
-        var isAltChord = (_leftAltDown || _rightAltDown) &&
-            virtualKey is NativeMethods.VkTab or NativeMethods.VkEscape or NativeMethods.VkSpace or NativeMethods.VkF4;
-        var isControlChord = (_leftControlDown || _rightControlDown) && virtualKey == NativeMethods.VkEscape;
-        if (!keyDown || (!isAltChord && !isControlChord) ||
-            !_windowController.TryGetForegroundMsrdcWindow(out var window) ||
-            !_windowController.IsPseudoMaximized(window) ||
-            !_windowController.TryGetKeyboardTarget(window, out keyboardTarget))
-        {
-            keyboardTarget = default;
-            return false;
-        }
-
-        _capturedSystemKeys[virtualKey] = keyboardTarget;
-        return true;
-    }
-
-    private void UpdateModifierState(uint virtualKey, bool keyDown)
-    {
-        switch (virtualKey)
-        {
-            case NativeMethods.VkLWin:
-                _leftWindowsDown = keyDown;
-                break;
-            case NativeMethods.VkRWin:
-                _rightWindowsDown = keyDown;
-                break;
-            case NativeMethods.VkLMenu:
-                _leftAltDown = keyDown;
-                break;
-            case NativeMethods.VkRMenu:
-                _rightAltDown = keyDown;
-                break;
-            case NativeMethods.VkLControl:
-                _leftControlDown = keyDown;
-                break;
-            case NativeMethods.VkRControl:
-                _rightControlDown = keyDown;
-                break;
-        }
     }
 
     private void DetectCaptionDoubleClick(nint window, NativeMethods.Point position, uint time)
@@ -395,18 +320,17 @@ internal sealed class InputHookService : IDisposable
 
     private void ResetKeyboardCapture()
     {
-        _windowsChordTarget = default;
-        _capturedSystemKeys.Clear();
-        _consumeNormalWindowWinUp = false;
-        _consumeNormalWindowWindowsRelease = false;
-        ClearPendingWindowsKey();
+        if (_pendingNormalWindowsKey != 0)
+        {
+            ReplayPendingWindowsKey(includeKeyUp: false);
+        }
     }
 
-    private bool ReplayPendingWindowsKey(bool includeKeyUp)
+    private uint ReplayPendingWindowsKey(bool includeKeyUp)
     {
         if (_pendingNormalWindowsKey == 0)
         {
-            return true;
+            return 0;
         }
 
         var keyDown = CreateReplayInput(_pendingNormalWindowsKey, _pendingNormalWindowsScanCode, _pendingNormalWindowsFlags, keyUp: false);
@@ -423,10 +347,10 @@ internal sealed class InputHookService : IDisposable
 
         var sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.Input>());
         ClearPendingWindowsKey();
-        return sent == inputs.Length;
+        return sent;
     }
 
-    private bool ReplayPendingWindowsKeyWithCurrent(
+    private uint ReplayPendingWindowsKeyWithCurrent(
         in NativeMethods.KeyboardLowLevelHookData currentKey,
         bool currentKeyDown)
     {
@@ -443,7 +367,7 @@ internal sealed class InputHookService : IDisposable
         var inputs = new[] { windowsKeyDown, currentInput };
         var sent = NativeMethods.SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<NativeMethods.Input>());
         ClearPendingWindowsKey();
-        return sent == inputs.Length;
+        return sent;
     }
 
     private static NativeMethods.Input CreateReplayInput(uint virtualKey, uint scanCode, uint hookFlags, bool keyUp)
@@ -487,4 +411,5 @@ internal sealed class InputHookService : IDisposable
             _dispatcher.BeginInvoke(action);
         }
     }
+
 }
